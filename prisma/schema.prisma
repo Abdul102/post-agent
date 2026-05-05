@@ -1,0 +1,308 @@
+// NextGen Growth Agent — Prisma schema
+// Run: npx prisma db push  (or)  npx prisma migrate dev
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Auth ────────────────────────────────────────────────────────────────────
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  passwordHash  String?
+  image         String?
+  emailVerified DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts            Account[]
+  sessions            Session[]
+  businessProfile     BusinessProfile?
+  socialAccounts      SocialAccount[]
+  posts               Post[]
+  images              Image[]
+  blogs               Blog[]
+  seoSuggestions      SeoSuggestion[]
+  schedules           Schedule[]
+  syndicationTargets  SyndicationTarget[]
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ── Business profile ────────────────────────────────────────────────────────
+model BusinessProfile {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  websiteUrl      String
+  businessName    String
+  services        String   @db.Text
+  targetAudience  String   @db.Text
+  brandTone       String
+  keywords        String[] @default([])
+  logoUrl         String?
+  logoPosition    String   @default("bottom-right") // top-left, top-right, bottom-left, bottom-right
+  defaultPostTime String   @default("09:00")        // HH:mm in user-local time
+  autoPublish     Boolean  @default(false)
+  websiteSummary  String?  @db.Text                  // AI-extracted summary of the site
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("business_profiles")
+}
+
+// ── Connected social accounts (Meta OAuth tokens) ───────────────────────────
+model SocialAccount {
+  id              String    @id @default(cuid())
+  userId          String
+  platform        String    // "facebook" | "instagram"
+  externalId      String    // FB Page ID or IG Business Account ID
+  name            String
+  pictureUrl      String?
+  accessToken     String    @db.Text
+  tokenExpiresAt  DateTime?
+  scopes          String[]  @default([])
+  connectedAt     DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  posts         Post[]
+  publications  PostPublication[]
+
+  @@unique([userId, platform, externalId])
+  @@map("social_accounts")
+}
+
+// ── Manual syndication targets (subreddits, FB groups user owns, etc.) ──────
+// One row = one place the user wants to push content to. The platform field
+// indicates which connected SocialAccount drives the publishing.
+model SyndicationTarget {
+  id          String   @id @default(cuid())
+  userId      String
+  platform    String   // "reddit", "medium-pub", "fb-group", etc.
+  /// Identifier within the platform (subreddit name, publication slug, group id, …)
+  targetRef   String
+  /// Human label for the UI
+  label       String
+  /// Free-form notes / per-target rules (e.g. "self-promo allowed Sundays only")
+  notes       String?  @db.Text
+  enabled     Boolean  @default(true)
+  /// Last time we successfully posted here (used for cooldown logic)
+  lastPostedAt DateTime?
+  /// Minimum hours to wait between posts to this target (default 168h = 1 week)
+  cooldownHrs Int      @default(168)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, platform, targetRef])
+  @@index([userId, platform, enabled])
+  @@map("syndication_targets")
+}
+
+// ── Per-platform publish records ────────────────────────────────────────────
+// One Post can be published to many platforms. Each attempt gets one row so
+// we can show per-platform status, retry the failed ones, and link out to the
+// live URL on each platform.
+model PostPublication {
+  id              String     @id @default(cuid())
+  postId          String
+  socialAccountId String
+  /// Optional reference to a SyndicationTarget row (subreddit, etc.)
+  targetId        String?
+  status          PostStatus @default(SCHEDULED)
+  externalPostId  String?
+  externalUrl     String?
+  failureReason   String?    @db.Text
+  publishedAt     DateTime?
+  scheduledFor    DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  post           Post           @relation(fields: [postId], references: [id], onDelete: Cascade)
+  socialAccount  SocialAccount  @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+
+  @@index([postId])
+  @@index([socialAccountId, status])
+  @@map("post_publications")
+}
+
+// ── Generated posts ─────────────────────────────────────────────────────────
+enum PostStatus {
+  DRAFT
+  AWAITING_APPROVAL
+  SCHEDULED
+  PUBLISHED
+  FAILED
+}
+
+model Post {
+  id              String      @id @default(cuid())
+  userId          String
+  socialAccountId String?
+  platform        String?     // "facebook" | "instagram" — null until target chosen
+  hook            String      @db.Text
+  body            String      @db.Text
+  cta             String      @db.Text
+  hashtags        String[]    @default([])
+  websiteLink     String?
+  fullCaption     String      @db.Text   // pre-assembled FB/IG caption
+  status          PostStatus  @default(DRAFT)
+  scheduledFor    DateTime?
+  publishedAt     DateTime?
+  externalPostId  String?     // FB/IG post id once published
+  failureReason   String?     @db.Text
+  topic           String?
+  modelUsed       String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  socialAccount SocialAccount?    @relation(fields: [socialAccountId], references: [id], onDelete: SetNull)
+  image         Image?
+  schedule      Schedule?
+  publications  PostPublication[]
+
+  @@index([userId, status])
+  @@index([userId, createdAt])
+  @@map("posts")
+}
+
+// ── Generated images (linked 1:1 to a post in MVP) ──────────────────────────
+model Image {
+  id              String   @id @default(cuid())
+  userId          String
+  postId          String?  @unique
+  prompt          String   @db.Text
+  provider        String   // "pollinations" | "openai" | "replicate"
+  rawUrl          String   @db.Text  // pre-overlay (provider URL or Cloudinary)
+  finalUrl        String   @db.Text  // post-overlay (Cloudinary)
+  width           Int?
+  height          Int?
+  logoApplied     Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post Post? @relation(fields: [postId], references: [id], onDelete: SetNull)
+
+  @@map("images")
+}
+
+// ── Blog drafts ─────────────────────────────────────────────────────────────
+model Blog {
+  id                  String   @id @default(cuid())
+  userId              String
+  seoTitle            String
+  metaDescription     String   @db.Text
+  slug                String
+  contentMarkdown     String   @db.Text
+  headings            String[] @default([])   // H2/H3 outline
+  keywords            String[] @default([])
+  internalLinks       String[] @default([])   // suggested internal links
+  cta                 String   @db.Text
+  status              String   @default("DRAFT") // DRAFT | PUBLISHED
+  modelUsed           String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, slug])
+  @@index([userId, createdAt])
+  @@map("blogs")
+}
+
+// ── SEO suggestions (daily generated tips) ──────────────────────────────────
+model SeoSuggestion {
+  id                String   @id @default(cuid())
+  userId            String
+  forDate           DateTime @default(now()) @db.Date
+  blogTitles        String[] @default([])
+  metaTitles        String[] @default([])
+  metaDescriptions  String[] @default([])
+  keywords          String[] @default([])
+  faqs              Json?     // [{ q, a }]
+  outreachMessages  String[] @default([])
+  directories       String[] @default([])  // suggested submission targets
+  notes             String?  @db.Text
+  createdAt         DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, forDate])
+  @@map("seo_suggestions")
+}
+
+// ── Scheduling jobs (one per scheduled post) ────────────────────────────────
+enum ScheduleStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+  CANCELLED
+}
+
+model Schedule {
+  id           String         @id @default(cuid())
+  userId       String
+  postId       String         @unique
+  runAt        DateTime
+  status       ScheduleStatus @default(PENDING)
+  attempts     Int            @default(0)
+  lastError    String?        @db.Text
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([status, runAt])
+  @@map("schedules")
+}
