@@ -22,11 +22,11 @@ export async function GET(req: Request) {
   }
 
   const now = new Date();
-  const hh = String(now.getUTCHours()).padStart(2, '0');
 
-  // Pick users whose configured post time falls in this hour.
+  // Vercel Hobby (free) only allows daily crons, so we generate one post per
+  // user per day for everyone with a business profile (regardless of their
+  // configured `defaultPostTime`). Upgrade to Vercel Pro for hourly crons.
   const profiles = await prisma.businessProfile.findMany({
-    where: { defaultPostTime: { startsWith: `${hh}:` } },
     include: { user: true },
   });
 
