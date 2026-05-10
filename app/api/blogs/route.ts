@@ -18,6 +18,9 @@ export async function GET() {
 const generateSchema = z.object({
   topic: z.string().optional(),
   targetKeyword: z.string().optional(),
+  targetAudience: z.string().optional(),
+  tone: z.string().optional(),
+  websiteUrl: z.string().url().optional(),
 });
 
 export async function POST(req: Request) {
@@ -27,8 +30,8 @@ export async function POST(req: Request) {
     const profile = await prisma.businessProfile.findUnique({ where: { userId } });
     if (!profile) return bad('Set up your business profile first', 412);
 
-    const { topic, targetKeyword } = generateSchema.parse(await req.json().catch(() => ({})));
-    const g = await generateBlog(profile, { topic, targetKeyword });
+    const params = generateSchema.parse(await req.json().catch(() => ({})));
+    const g = await generateBlog(profile, params);
 
     // Ensure unique slug per user
     let slug = g.slug;
@@ -41,13 +44,24 @@ export async function POST(req: Request) {
       data: {
         userId,
         seoTitle: g.seoTitle,
+        metaTitle: g.metaTitle ?? g.seoTitle,
         metaDescription: g.metaDescription,
         slug,
         contentMarkdown: g.contentMarkdown,
         headings: g.headings,
         keywords: g.keywords,
+        keywordClusters: (g.keywordClusters ?? []) as any,
+        semanticKeywords: g.semanticKeywords ?? [],
+        faqs: (g.faqs ?? []) as any,
         internalLinks: g.internalLinks,
+        externalLinks: g.externalLinks ?? [],
+        readabilityScore: g.readabilityScore,
+        seoScore: g.seoScore,
+        improvementSuggestions: g.improvementSuggestions ?? [],
         cta: g.cta,
+        targetAudience: params.targetAudience ?? null,
+        tone: params.tone ?? null,
+        websiteUrl: params.websiteUrl ?? profile.websiteUrl,
         status: 'DRAFT',
         modelUsed: TEXT_MODEL,
       },

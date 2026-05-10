@@ -3,11 +3,13 @@ import { prisma } from '@/lib/prisma';
 import { requireUser, ok, bad, fail } from '@/lib/api-utils';
 
 const patchSchema = z.object({
+  title: z.string().max(200).optional().nullable(),
   hook: z.string().optional(),
   body: z.string().optional(),
   cta: z.string().optional(),
   hashtags: z.array(z.string()).optional(),
   fullCaption: z.string().optional(),
+  videoUrl: z.string().url().optional().nullable(),
   status: z.enum(['DRAFT', 'AWAITING_APPROVAL', 'SCHEDULED', 'PUBLISHED', 'FAILED']).optional(),
   scheduledFor: z.string().datetime().optional().nullable(),
   socialAccountId: z.string().optional().nullable(),

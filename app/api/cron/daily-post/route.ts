@@ -3,7 +3,7 @@ import { generateDailyPost } from '@/lib/content-generator';
 import { generateImage, fetchImageBuffer } from '@/lib/image-provider';
 import { applyLogoOverlay } from '@/lib/logo-overlay';
 import { isCloudinaryConfigured, uploadBufferToCloudinary } from '@/lib/cloudinary';
-import { publishFacebookPagePost, publishInstagramPost } from '@/lib/meta-publish';
+import { dispatchPublish } from '@/lib/publish-dispatcher';
 import { TEXT_MODEL } from '@/lib/openai';
 import { NextResponse } from 'next/server';
 
@@ -105,46 +105,64 @@ export async function GET(req: Request) {
         // Image is optional for FB; log but don't fail the whole job.
       }
 
-      // Auto-publish if enabled and we can find an account
+      // Auto-publish to ALL connected accounts (FB + IG + Reddit + Dev.to)
+      // when autoPublish is on. Each result writes a PostPublication row so
+      // the Insights view can show per-platform status.
       if (profile.autoPublish) {
         const accounts = await prisma.socialAccount.findMany({
           where: { userId: profile.userId },
         });
-        const fb = accounts.find((a) => a.platform === 'facebook');
-        const ig = accounts.find((a) => a.platform === 'instagram');
-        const target = fb ?? ig;
         const reloaded = await prisma.post.findUnique({
           where: { id: post.id },
           include: { image: true },
         });
-        if (target && reloaded) {
-          try {
-            const r =
-              target.platform === 'facebook'
-                ? await publishFacebookPagePost(target, {
-                    message: reloaded.fullCaption,
-                    imageUrl: reloaded.image?.finalUrl,
-                  })
-                : await publishInstagramPost(target, {
-                    caption: reloaded.fullCaption,
-                    imageUrl: reloaded.image!.finalUrl,
-                  });
-            await prisma.post.update({
-              where: { id: post.id },
-              data: {
-                status: 'PUBLISHED',
-                publishedAt: new Date(),
-                socialAccountId: target.id,
-                platform: target.platform,
-                externalPostId: r.externalPostId,
-              },
-            });
-          } catch (e) {
-            await prisma.post.update({
-              where: { id: post.id },
-              data: { status: 'FAILED', failureReason: e instanceof Error ? e.message : 'publish failed' },
-            });
+        if (accounts.length > 0 && reloaded) {
+          let anyOk = false;
+          let firstAccountId: string | null = null;
+          for (const account of accounts) {
+            // Reddit needs subreddits configured separately — skip in cron auto-publish
+            // unless the user has configured a SyndicationTarget. For simplicity here
+            // we only auto-publish to facebook + instagram + devto.
+            if (account.platform === 'reddit') continue;
+            try {
+              const r = await dispatchPublish({ post: reloaded, account, profile });
+              await prisma.postPublication.create({
+                data: {
+                  postId: post.id,
+                  socialAccountId: account.id,
+                  status: 'PUBLISHED',
+                  externalPostId: r.externalPostId,
+                  externalUrl: r.externalUrl ?? null,
+                  publishedAt: new Date(),
+                },
+              });
+              anyOk = true;
+              if (!firstAccountId) firstAccountId = account.id;
+            } catch (e) {
+              await prisma.postPublication.create({
+                data: {
+                  postId: post.id,
+                  socialAccountId: account.id,
+                  status: 'FAILED',
+                  failureReason: e instanceof Error ? e.message : 'publish failed',
+                },
+              });
+            }
           }
+          await prisma.post.update({
+            where: { id: post.id },
+            data: anyOk
+              ? {
+                  status: 'PUBLISHED',
+                  publishedAt: new Date(),
+                  socialAccountId: firstAccountId ?? undefined,
+                  platform: accounts.find((a) => a.id === firstAccountId)?.platform ?? undefined,
+                }
+              : {
+                  status: 'FAILED',
+                  failureReason: 'All connected accounts failed to publish',
+                },
+          });
         }
       }
 

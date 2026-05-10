@@ -2,8 +2,12 @@ node_modules
 .next
 .env
 .env.local
+.env.production
+.env*.local
 .DS_Store
 *.log
 prisma/dev.db
 prisma/migrations
 public/uploads
+.vercel
+tsconfig.tsbuildinfo

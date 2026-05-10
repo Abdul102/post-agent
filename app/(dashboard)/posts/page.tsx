@@ -1,15 +1,18 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { PostCard } from '@/components/PostCard';
+import { PostCard, PostCardData } from '@/components/PostCard';
+import { EditPostModal } from '@/components/EditPostModal';
+import { ConnectionStatus } from '@/components/ConnectionStatus';
 import toast from 'react-hot-toast';
 
 const FILTERS = ['ALL', 'DRAFT', 'AWAITING_APPROVAL', 'SCHEDULED', 'PUBLISHED', 'FAILED'] as const;
 
 export default function PostsPage() {
-  const [posts, setPosts] = useState<any[]>([]);
+  const [posts, setPosts] = useState<PostCardData[]>([]);
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>('ALL');
   const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<PostCardData | null>(null);
 
   async function load() {
     setLoading(true);
@@ -56,8 +59,13 @@ export default function PostsPage() {
     <div className="space-y-6 max-w-6xl">
       <div>
         <h1 className="text-2xl font-semibold">Post History</h1>
-        <p className="text-sm text-gray-500">Every post you've generated.</p>
+        <p className="text-sm text-gray-500">
+          Every post you've generated. Click Edit to update before publishing.
+        </p>
       </div>
+
+      <ConnectionStatus />
+
       <div className="flex flex-wrap gap-2">
         {FILTERS.map((f) => (
           <button
@@ -79,9 +87,27 @@ export default function PostsPage() {
       ) : (
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
           {posts.map((p) => (
-            <PostCard key={p.id} post={p} onApprove={approve} onPublishAll={publishAll} onDelete={del} />
+            <PostCard
+              key={p.id}
+              post={p}
+              onApprove={approve}
+              onPublishAll={publishAll}
+              onDelete={del}
+              onEdit={setEditing}
+            />
           ))}
         </div>
+      )}
+
+      {editing && (
+        <EditPostModal
+          post={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            void load();
+          }}
+        />
       )}
     </div>
   );

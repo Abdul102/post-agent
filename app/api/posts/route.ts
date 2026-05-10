@@ -25,12 +25,14 @@ export async function GET(req: Request) {
 }
 
 const createSchema = z.object({
+  title: z.string().max(200).optional(),
   hook: z.string().min(1),
   body: z.string().min(1),
   cta: z.string().min(1),
   hashtags: z.array(z.string()).default([]),
   fullCaption: z.string().min(1),
   websiteLink: z.string().url().optional(),
+  videoUrl: z.string().url().optional(),
   topic: z.string().optional(),
 });
 

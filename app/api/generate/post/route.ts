@@ -6,6 +6,8 @@ import { TEXT_MODEL } from '@/lib/openai';
 
 const schema = z.object({
   topic: z.string().optional(),
+  /** Optional user-supplied title. If provided, used as-is. */
+  title: z.string().max(200).optional(),
   /** If true, also generate the image immediately. */
   withImage: z.boolean().optional(),
 });
@@ -15,7 +17,7 @@ export async function POST(req: Request) {
   if (error) return error;
   try {
     const body = await req.json().catch(() => ({}));
-    const { topic } = schema.parse(body);
+    const { topic, title } = schema.parse(body);
 
     const profile = await prisma.businessProfile.findUnique({ where: { userId } });
     if (!profile) return bad('Set up your business profile first', 412);
@@ -31,10 +33,15 @@ export async function POST(req: Request) {
 
     const generated = await generateDailyPost(profile, { recentTopics, userTopic: topic });
 
+    // Derive a title if user didn't provide one — use the hook truncated.
+    const derivedTitle =
+      title?.trim() || generated.hook.split(/[.!?]/)[0]?.trim().slice(0, 120) || null;
+
     const post = await prisma.post.create({
       data: {
         userId,
         topic: generated.topic,
+        title: derivedTitle,
         hook: generated.hook,
         body: generated.body,
         cta: generated.cta,

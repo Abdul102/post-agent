@@ -31,6 +31,8 @@ model User {
   seoSuggestions      SeoSuggestion[]
   schedules           Schedule[]
   syndicationTargets  SyndicationTarget[]
+  competitors         Competitor[]
+  postingSchedule     PostingSchedule?
 
   @@map("users")
 }
@@ -188,19 +190,28 @@ model Post {
   userId          String
   socialAccountId String?
   platform        String?     // "facebook" | "instagram" — null until target chosen
+  title           String?     // optional explicit title for the post
   hook            String      @db.Text
   body            String      @db.Text
   cta             String      @db.Text
   hashtags        String[]    @default([])
   websiteLink     String?
+  videoUrl        String?     @db.Text   // optional video URL/upload
   fullCaption     String      @db.Text   // pre-assembled FB/IG caption
   status          PostStatus  @default(DRAFT)
   scheduledFor    DateTime?
   publishedAt     DateTime?
   externalPostId  String?     // FB/IG post id once published
+  externalUrl     String?     // permalink to the live post (for analytics linkout)
   failureReason   String?     @db.Text
   topic           String?
   modelUsed       String?
+  /// Cached impression count from Graph API insights (auto-refreshed)
+  impressions     Int         @default(0)
+  /// Cached reach/engagement counts
+  reach           Int         @default(0)
+  engagements     Int         @default(0)
+  insightsAt      DateTime?
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
 
@@ -221,7 +232,11 @@ model Image {
   userId          String
   postId          String?  @unique
   prompt          String   @db.Text
-  provider        String   // "pollinations" | "openai" | "replicate"
+  provider        String   // "pollinations" | "openai" | "replicate" | "upload"
+  /// "generated" (AI) or "uploaded" (user-uploaded photo)
+  source          String   @default("generated")
+  /// Aspect ratio used at upload/crop time (e.g. "1:1", "1.91:1", "4:5", "9:16")
+  aspectRatio     String?
   rawUrl          String   @db.Text  // pre-overlay (provider URL or Cloudinary)
   finalUrl        String   @db.Text  // post-overlay (Cloudinary)
   width           Int?
@@ -240,23 +255,62 @@ model Blog {
   id                  String   @id @default(cuid())
   userId              String
   seoTitle            String
+  metaTitle           String?              // SEO title tag (different from H1)
   metaDescription     String   @db.Text
   slug                String
   contentMarkdown     String   @db.Text
+  contentHtml         String?  @db.Text    // optional pre-rendered HTML
   headings            String[] @default([])   // H2/H3 outline
   keywords            String[] @default([])
+  /// Keyword clusters: [{label,keywords:[]}] stored as JSON
+  keywordClusters     Json?
+  /// Semantic / LSI keywords
+  semanticKeywords    String[] @default([])
+  /// FAQ block: [{q,a}]
+  faqs                Json?
   internalLinks       String[] @default([])   // suggested internal links
+  /// Recommended outbound/external links
+  externalLinks       String[] @default([])
+  /// Readability score (0-100, higher = easier)
+  readabilityScore    Int?
+  /// Composite SEO score (0-100)
+  seoScore            Int?
+  /// AI-suggested improvements
+  improvementSuggestions String[] @default([])
+  /// Public view count
+  viewCount           Int      @default(0)
   cta                 String   @db.Text
+  /// Inputs the user supplied so the page can re-render the brief
+  targetAudience      String?  @db.Text
+  tone                String?
+  websiteUrl          String?
   status              String   @default("DRAFT") // DRAFT | PUBLISHED
   modelUsed           String?
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  views BlogView[]
 
   @@unique([userId, slug])
   @@index([userId, createdAt])
   @@map("blogs")
+}
+
+// ── Public blog view tracking (anon) ────────────────────────────────────────
+model BlogView {
+  id        String   @id @default(cuid())
+  blogId    String
+  ipHash    String?  // hashed IP for unique-per-day dedup
+  userAgent String?  @db.Text
+  referrer  String?  @db.Text
+  country   String?
+  createdAt DateTime @default(now())
+
+  blog Blog @relation(fields: [blogId], references: [id], onDelete: Cascade)
+
+  @@index([blogId, createdAt])
+  @@map("blog_views")
 }
 
 // ── SEO suggestions (daily generated tips) ──────────────────────────────────
@@ -305,4 +359,90 @@ model Schedule {
 
   @@index([status, runAt])
   @@map("schedules")
+}
+
+// ── Competitor tracking ────────────────────────────────────────────────────
+model Competitor {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  websiteUrl  String?
+  linkedinUrl String?
+  twitterUrl  String?
+  instagramUrl String?
+  facebookUrl String?
+  notes       String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user     User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  insights CompetitorInsight[]
+
+  @@index([userId, createdAt])
+  @@map("competitors")
+}
+
+model CompetitorInsight {
+  id                  String   @id @default(cuid())
+  competitorId        String
+  /// Common topics they post about
+  commonTopics        String[] @default([])
+  /// e.g. "3-4 posts/week"
+  postingFrequency    String?
+  /// Topics they don't cover (opportunities)
+  contentGaps         String[] @default([])
+  /// Concrete content ideas user can pursue
+  contentIdeas        String[] @default([])
+  /// Recommended post topics for the user
+  recommendedTopics   String[] @default([])
+  /// Free-form summary
+  summary             String?  @db.Text
+  modelUsed           String?
+  generatedAt         DateTime @default(now())
+
+  competitor Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+
+  @@index([competitorId, generatedAt])
+  @@map("competitor_insights")
+}
+
+// ── Per-platform variants of a generated post ──────────────────────────────
+model PlatformPostVersion {
+  id          String   @id @default(cuid())
+  postId      String
+  platform    String   // "facebook" | "instagram" | "linkedin" | "twitter"
+  caption     String   @db.Text
+  hashtags    String[] @default([])
+  charCount   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([postId, platform])
+  @@index([postId])
+  @@map("platform_post_versions")
+}
+
+// ── User-level posting schedule (time range + frequency) ───────────────────
+model PostingSchedule {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  enabled      Boolean  @default(false)
+  /// HH:mm — earliest local time a post may run
+  startTime    String   @default("09:00")
+  /// HH:mm — latest local time a post may run
+  endTime      String   @default("18:00")
+  /// Posts per day (1..5)
+  postsPerDay  Int      @default(1)
+  /// IANA timezone (e.g. "America/New_York"). Defaults to UTC.
+  timezone     String   @default("UTC")
+  /// Days of week (0=Sun .. 6=Sat). Empty = every day.
+  daysOfWeek   Int[]    @default([])
+  /// Auto-publish to all connected accounts when generated
+  autoPublishAll Boolean @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("posting_schedules")
 }

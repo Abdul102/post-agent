@@ -242,6 +242,14 @@ export default function SettingsPage() {
         <button onClick={() => save(false)} className="btn-primary" disabled={saving}>
           Save posting preferences
         </button>
+        <p className="text-xs text-gray-500">
+          Need multiple posts a day at specific times?{' '}
+          <a className="text-brand-700 font-medium" href="/schedules">
+            Open Auto-Schedule →
+          </a>{' '}
+          to pick a time range and posts-per-day, and Post Agent will generate &amp; publish to all
+          connected accounts automatically.
+        </p>
       </div>
     </div>
   );
